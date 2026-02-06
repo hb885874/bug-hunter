@@ -1,48 +1,96 @@
+import os
+import json
+from typing import Dict
 
-def intelligent_analysis(scope, recon_data):
-    print("[Reasoning] Performing intelligent interpretation")
-    findings = []
+# -------------------------------
+# LLM configuration
+# -------------------------------
 
-    # Subdomain exposure insight
-    subfinder = recon_data.get("subfinder", {})
-    amass = recon_data.get("amass", {})
+USE_OPENAI = False #True  # Toggle OpenAI usage for final report
+OPENAI_MODEL = "gpt-4"  # Model for final report
 
-    subfinder_out = subfinder.get("output", "") if isinstance(subfinder, dict) else subfinder
-    amass_out = amass.get("output", "") if isinstance(amass, dict) else amass
+# -------------------------------
+# Initialize your LLMs
+# -------------------------------
 
-    subdomains = set(subfinder_out.split()) | set(amass_out.split())
-    if len(subdomains) > 5:
-        findings.append({
-            "title": "Large External Attack Surface",
-            "confidence": "Medium",
-            "description": f"Detected {len(subdomains)} subdomains which may expand attack surface.",
-            "evidence": {
-                "subfinder_raw": subfinder.get("raw_file") if isinstance(subfinder, dict) else None,
-                "amass_raw": amass.get("raw_file") if isinstance(amass, dict) else None,
-            }
-        })
+# --- Local LLM ---
+# Here you plug in your local model wrapper.
+# Example: a class LocalLLM with a __call__(prompt) method
+# You can use llama.cpp, text-generation-webui, Mistral, etc.
+# The agent will call local_llm(prompt) to get structured insights
 
-    # Web service exposure insight
-    httpx = recon_data.get("httpx", {})
-    httpx_out = httpx.get("output", "") if isinstance(httpx, dict) else httpx
-    if httpx_out and "failed" not in httpx_out.lower():
-        findings.append({
-            "title": "Public Web Service Exposure",
-            "confidence": "Low",
-            "description": "Target responds publicly. Review headers and authentication controls.",
-            "evidence": {"httpx_raw": httpx.get("raw_file") if isinstance(httpx, dict) else None}
-        })
+try:
+    from llm_local import LocalLLM  # <-- you need to implement/provide this
+    local_llm = LocalLLM(model_path="models/ggml-model.bin")  # path to local model
+except ImportError:
+    print("[Warning] Local LLM wrapper not found. Please implement llm_local.py")
+    local_llm = None
 
-    # Endpoint discovery insight
-    katana = recon_data.get("katana", {})
-    katana_out = katana.get("output", "") if isinstance(katana, dict) else katana
-    endpoints = katana_out.splitlines()
-    if len(endpoints) > 20:
-        findings.append({
-            "title": "Extensive Endpoint Discovery",
-            "confidence": "Medium",
-            "description": f"Katana discovered {len(endpoints)} endpoints worth manual review.",
-            "evidence": {"katana_raw": katana.get("raw_file") if isinstance(katana, dict) else None}
-        })
+# --- OpenAI LLM ---
+try:
+    from langchain import OpenAI
+    openai_llm = OpenAI(model_name=OPENAI_MODEL, temperature=0)
+except ImportError:
+    print("[Warning] OpenAI LLM not installed. Install langchain and openai if needed.")
+    openai_llm = None
+
+# -------------------------------
+# Hybrid reasoning function
+# -------------------------------
+
+def intelligent_analysis(scope: Dict, recon_results: Dict) -> Dict:
+    """
+    Runs hybrid reasoning:
+      1. Local LLM for structured processing
+      2. Optional OpenAI for final VDP-ready report
+
+    Args:
+        scope: {"domain": "example.com", "focus_subdomain": "api.example.com"} (optional)
+        recon_results: Output from run_recon()
+
+    Returns:
+        findings: dict with structured insights
+    """
+    domain = scope.get("domain")
+    focus = scope.get("focus_subdomain")
+
+    findings = {"domain": domain, "focus": focus}
+
+    # ---------------------------------
+    # Step 1: Local LLM processing
+    # ---------------------------------
+    if local_llm is None:
+        findings["local_insights"] = "[Local LLM not configured]"
+    else:
+        local_prompt = f"""
+You are a cybersecurity assistant. Analyze the following recon results:
+
+- Host clusters
+- Parameters and endpoints
+- Tech fingerprinting
+- Risk assessment
+
+Recon data (JSON):
+{json.dumps(recon_results, indent=2)}
+"""
+        local_output = local_llm(local_prompt)
+        findings["local_insights"] = local_output
+
+    # ---------------------------------
+    # Step 2: Optional OpenAI summarization
+    # ---------------------------------
+    if USE_OPENAI:
+        if openai_llm is None:
+            findings["final_report"] = "[OpenAI LLM not available]"
+        else:
+            openai_prompt = f"""
+You are a cybersecurity assistant. 
+Given the processed findings from a local LLM, generate a concise, VDP-ready report:
+
+Processed Findings:
+{findings['local_insights']}
+"""
+            final_report = openai_llm(openai_prompt)
+            findings["final_report"] = final_report
 
     return findings
