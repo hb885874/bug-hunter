@@ -45,7 +45,9 @@ def run_recon(scope):
 
     results = {}
 
-    results["httpx"] = run_tool(["httpx", "-silent", "-title", f"https://{domain}"], domain, "httpx")
+    HTTPX_BIN = r"C:\Users\parve\go\bin\httpx.exe"
+
+    results["httpx"] = run_tool([HTTPX_BIN, "-silent", "-title", f"https://{domain}"], domain, "httpx")
     results["subfinder"] = run_tool(["subfinder", "-silent", "-d", domain], domain, "subfinder")
     results["amass"] = run_tool(["amass", "enum", "-passive", "-d", domain], domain, "amass", timeout=240)
     results["katana"] = run_tool(["katana", "-silent", "-u", f"https://{domain}"], domain, "katana")
