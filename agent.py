@@ -30,8 +30,9 @@ class Agent:
         self._worker.join(timeout=5)
         print("Agent stopped.")
 
-    def enqueue(self, domain):
-        self._queue.put(domain)
+    def enqueue(self, scope):
+        self._queue.put(scope)
+
 
     def _worker_loop(self):
         while not self._stop_event.is_set():
@@ -42,12 +43,19 @@ class Agent:
             if item is None:
                 break
 
-            domain = item
-            print(f"[Worker] Starting scan for {domain}")
-            scope = parse_scope(domain)
+            scope = item
+            domain = scope["domain"]
+
+            focus = scope.get("focus_subdomain")
+            if focus:
+                print(f"[Worker] Starting FOCUSED scan for {domain} → {focus}")
+            else:
+                print(f"[Worker] Starting full scan for {domain}")
+
             recon_data = run_recon(scope)
             findings = intelligent_analysis(scope, recon_data)
             report = generate_report(domain, findings)
+
             print(f"[Worker] Report generated: {report}")
             self._queue.task_done()
 
@@ -79,12 +87,27 @@ class Agent:
 
             # Accept commands like: scan example.com or just example.com
             parts = line.split()
-            if parts[0].lower() == "scan" and len(parts) > 1:
-                domain = parts[1]
-            else:
-                domain = parts[0]
 
-            self.enqueue(domain)
+            if parts[0].lower() == "scan":
+                parts = parts[1:]
+
+            domain = parts[0]
+            focus = None
+
+            if "--focus" in parts:
+                idx = parts.index("--focus")
+                if idx + 1 < len(parts):
+                    focus = parts[idx + 1]
+
+            scope = {"domain": domain}
+            if focus:
+                scope["focus_subdomain"] = focus
+                print(f"[Agent] Enqueued focused scan: {domain} → {focus}")
+            else:
+                print(f"[Agent] Enqueued full scan: {domain}")
+
+            self.enqueue(scope)
+
 
 
 def main():

@@ -5,11 +5,19 @@ from datetime import datetime
 from typing import List, Optional
 from rich.progress import Progress
 
+from .analysis import (
+    normalize_hosts,
+    cluster_hosts,
+    extract_live_urls,
+    extract_tech_fingerprints,
+    extract_katana_params,
+)
+
 
 ARTIFACT_DIR = "artifacts/raw"
 
 
-def _write_raw(domain: str, tool: str, output: str) -> Optional[str]:
+def _write_raw(domain: str, tool: str, output: str):
     os.makedirs(ARTIFACT_DIR, exist_ok=True)
     fname = f"{ARTIFACT_DIR}/{domain}_{tool}_{datetime.utcnow().strftime('%Y%m%dT%H%M%S')}.txt"
     try:
@@ -32,17 +40,13 @@ def run_tool(
     tool_name: str,
     timeout: int = 180,
     stdin: Optional[str] = None,
-    stream: bool = True
+    stream: bool = True,
 ):
     binary = cmd[0]
 
     if not _binary_exists(binary):
         msg = f"{binary} not found; skipping {tool_name}"
-        return {
-            "ok": False,
-            "output": msg,
-            "raw_file": _write_raw(domain, tool_name, msg),
-        }
+        return {"ok": False, "output": msg, "raw_file": _write_raw(domain, tool_name, msg)}
 
     output_lines = []
 
@@ -75,42 +79,36 @@ def run_tool(
 
     except subprocess.TimeoutExpired:
         msg = f"{tool_name} timed out after {timeout}s"
-        return {
-            "ok": False,
-            "output": msg,
-            "raw_file": _write_raw(domain, tool_name, msg),
-        }
-
-
-def _normalize_hosts(outputs: List[str]) -> str:
-    hosts = set()
-    for out in outputs:
-        for line in out.splitlines():
-            line = line.strip()
-            if line and not line.startswith("#"):
-                hosts.add(line.lower())
-    return "\n".join(sorted(hosts))
+        return {"ok": False, "output": msg, "raw_file": _write_raw(domain, tool_name, msg)}
 
 
 def run_recon(scope):
+    """
+    scope = {
+        "domain": "example.com",
+        "focus_subdomain": "api.example.com"  # optional
+    }
+    """
+
     domain = scope["domain"]
-    print(f"\n[Recon] Starting reconnaissance for {domain}\n")
+    focus = scope.get("focus_subdomain")
+
+    print(f"\n[Recon] Target: {domain}")
+    if focus:
+        print(f"[Recon] Focus mode enabled → {focus}\n")
 
     HTTPX_BIN = r"C:\Users\parve\go\bin\httpx.exe"
-
     results = {}
 
     with Progress() as progress:
         task = progress.add_task("[cyan]Recon pipeline", total=4)
 
-        # 1️⃣ Subdomain discovery
+        # 1️⃣ Discovery
         subfinder = run_tool(
             ["subfinder", "-silent", "-d", domain],
             domain,
             "subfinder",
         )
-        results["subfinder"] = subfinder
-        progress.advance(task)
 
         amass = run_tool(
             ["amass", "enum", "-passive", "-d", domain],
@@ -118,48 +116,59 @@ def run_recon(scope):
             "amass",
             timeout=240,
         )
-        results["amass"] = amass
+
         progress.advance(task)
 
-        # 2️⃣ Normalize hosts
-        host_list = _normalize_hosts([
-            subfinder["output"],
-            amass["output"],
-        ])
+        # 2️⃣ Normalize + optional scope narrowing
+        hosts = normalize_hosts([subfinder["output"], amass["output"]])
 
-        # 3️⃣ Live host detection (httpx)
+        if focus:
+            hosts = "\n".join(h for h in hosts.splitlines() if h == focus)
+
+        clusters = cluster_hosts(hosts)
+        results["host_clusters"] = clusters
+
+        progress.advance(task)
+
+        # 3️⃣ Live detection + tech fingerprinting
         httpx = run_tool(
             [
                 HTTPX_BIN,
                 "-silent",
                 "-status-code",
                 "-title",
+                "-tech-detect",
                 "-follow-redirects",
                 "-no-color",
             ],
             domain,
             "httpx",
-            stdin=host_list,
+            stdin=hosts,
         )
-        results["httpx"] = httpx
+        results["httpx_raw"] = httpx
+
+        live_urls = extract_live_urls(httpx["output"])
+        tech = extract_tech_fingerprints(httpx["output"])
+
+        results["live_urls"] = live_urls
+        results["tech_fingerprint"] = tech
+
         progress.advance(task)
 
-        # Extract only live URLs for crawling
-        live_urls = "\n".join(
-            line.split()[0]
-            for line in httpx["output"].splitlines()
-            if line.startswith("http")
-        )
-
-        # 4️⃣ Crawl only live hosts
+        # 4️⃣ Crawl + parameter extraction
         katana = run_tool(
             ["katana", "-silent"],
             domain,
             "katana",
-            stdin=live_urls,
+            stdin="\n".join(live_urls),
             timeout=300,
         )
-        results["katana"] = katana
+
+        params = extract_katana_params(katana["output"])
+
+        results["katana_raw"] = katana
+        results["params"] = params
+
         progress.advance(task)
 
     print("\n[Recon] Pipeline completed\n")
