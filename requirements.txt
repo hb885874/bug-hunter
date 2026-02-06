@@ -1,0 +1,6 @@
+httpx[cli]
+rich
+requests
+python-dotenv
+tqdm
+# Note: subfinder, amass, katana are Go binaries and must be installed separately
