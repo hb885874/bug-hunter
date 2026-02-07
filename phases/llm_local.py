@@ -1,27 +1,37 @@
-import subprocess
+import requests
+import json
 from typing import Optional
 
-class LocalLLM:
-    """
-    Simple wrapper for a local LLM.
-    Calls a CLI or Python module to generate text from a prompt.
-    """
-    def __init__(self, model_path: str, cmd_template: Optional[list] = None, timeout: int = 120):
-        self.model_path = model_path
-        self.timeout = timeout
-        # Default CLI call
-        self.cmd_template = cmd_template or ["text-generation-cli", "--model", self.model_path]
+OLLAMA_URL = "http://localhost:11434/api/generate"
 
-    def __call__(self, prompt: str) -> str:
+class LocalLLM:
+    def __init__(
+        self,
+        model: str = "codestral:22b",
+        timeout: int = 180,
+        temperature: float = 0.2,
+    ):
+        self.model = model
+        self.timeout = timeout
+        self.temperature = temperature
+
+    def generate(self, prompt: str) -> str:
+        payload = {
+            "model": self.model,
+            "prompt": prompt,
+            "stream": False,
+            "options": {
+                "temperature": self.temperature,
+            },
+        }
+
         try:
-            proc = subprocess.run(
-                self.cmd_template,
-                input=prompt,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                timeout=self.timeout
+            r = requests.post(
+                OLLAMA_URL,
+                json=payload,
+                timeout=self.timeout,
             )
-            return proc.stdout
+            r.raise_for_status()
+            return r.json().get("response", "")
         except Exception as e:
-            return f"[Local LLM error]: {e}"
+            return f"[LocalLLM error] {e}"
