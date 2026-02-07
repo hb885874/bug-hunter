@@ -1,28 +1,29 @@
-
 import os
+import json
 from datetime import datetime
 
-def generate_report(domain, findings):
-    os.makedirs("artifacts/reports", exist_ok=True)
-    filename = f"artifacts/reports/{domain}_{datetime.utcnow().strftime('%Y%m%dT%H%M%S')}.md"
 
-    with open(filename, "w") as f:
-        f.write(f"# Security Findings for {domain}\n\n")
+def sanitize(name: str) -> str:
+    return name.replace(".", "_").lower()
 
-        f.write(f"Generated: {datetime.utcnow().isoformat()} UTC\n\n")
 
-        if not findings:
-            f.write("No findings identified.\n")
-        else:
-            for item in findings:
-                f.write(f"## {item['title']}\n")
-                f.write(f"Confidence: {item['confidence']}\n\n")
-                f.write(f"{item['description']}\n\n")
-                if item.get("evidence"):
-                    f.write("**Evidence:**\n")
-                    for k, v in item["evidence"].items():
-                        if v:
-                            f.write(f"- {k}: {v}\n")
-                    f.write("\n")
+def generate_report(domain: str, findings: dict):
+    scan_name = sanitize(domain)
+    report_dir = os.path.join("artifacts", scan_name, "reports")
+    os.makedirs(report_dir, exist_ok=True)
 
-    return filename
+    ts = datetime.utcnow().strftime("%Y%m%dT%H%M%S")
+
+    json_path = os.path.join(report_dir, f"report_{ts}.json")
+    md_path = os.path.join(report_dir, f"report_{ts}.md")
+
+    with open(json_path, "w", encoding="utf-8") as f:
+        json.dump(findings, f, indent=2)
+
+    with open(md_path, "w", encoding="utf-8") as f:
+        f.write(f"# Recon Report: {domain}\n\n")
+        f.write("```json\n")
+        f.write(json.dumps(findings, indent=2))
+        f.write("\n```")
+
+    return md_path

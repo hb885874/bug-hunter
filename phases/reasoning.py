@@ -1,39 +1,48 @@
-from .llm_local import LocalLLM
 import json
+import requests
+from config import CONFIG
 
-llm = LocalLLM(model="codestral:22b")
 
-def intelligent_analysis(scope: dict, recon: dict) -> dict:
-    domain = scope["domain"]
+def call_local_llm(prompt: str) -> dict:
+    payload = {
+        "model": CONFIG["LOCAL_LLM_MODEL"],
+        "prompt": prompt,
+        "stream": False,
+    }
+
+    r = requests.post(CONFIG["OLLAMA_URL"], json=payload, timeout=120)
+    r.raise_for_status()
+
+    return json.loads(r.json()["response"])
+
+
+def intelligent_analysis(scope, recon_data):
+    if recon_data.get("skipped"):
+        return {"note": "Recon skipped, using existing artifacts"}
+
+    if not CONFIG["USE_LOCAL_LLM"]:
+        return {"note": "LLM disabled"}
 
     prompt = f"""
-You are a senior application security researcher.
+You are a security recon analyst.
 
-Context:
-Target domain: {domain}
+Input:
+- Host clusters
+- Live URLs
+- Technologies
+- Parameters
 
-Recon summary (structured, partial):
-{json.dumps(recon, indent=2)}
+Task:
+1. Identify risky surface areas
+2. Note suspicious endpoints
+3. Highlight weak tech stacks
+4. Output JSON only
 
-Tasks:
-1. Identify interesting hosts (prod vs dev vs api)
-2. Highlight risky patterns or misconfigurations
-3. Suggest manual validation ideas
-4. DO NOT invent vulnerabilities
-5. Be concise and structured
-
-Return your answer in this JSON format:
-{{
-  "interesting_hosts": [],
-  "risk_observations": [],
-  "manual_test_ideas": [],
-  "confidence_notes": ""
-}}
+Data:
+{json.dumps(recon_data, indent=2)}
 """
 
-    response = llm.generate(prompt)
-
-    return {
-        "domain": domain,
-        "local_llm_analysis": response,
-    }
+    try:
+        return call_local_llm(prompt)
+    except Exception as e:
+        return {"error": str(e)}
